@@ -1,5 +1,5 @@
 var pd = {
-  version: "1.4.11",
+  version: "1.4.12",
   bookmarkver: "1.4",
   editStrings: [
     "I love ice cream.",
@@ -714,6 +714,179 @@ var pd = {
       }
     },
   },
+  rateLimit: {
+    minIntervalMs: 2000,
+    maxIntervalMs: 60000,
+    intervalMs: 2000,
+    minBackoffMs: 5000,
+    baseBackoffMs: 5000,
+    maxBackoffMs: 900000,
+    jitterRatio: 0.2,
+    maxRetries: 8,
+    lowRemaining: 5,
+    recoverAfter: 5,
+    consecutive429: 0,
+    successStreak: 0,
+    nextSlot: 0,
+    penaltyUntil: 0,
+    responseHeader: function (jqXHR, name) {
+      return jqXHR && typeof jqXHR.getResponseHeader === "function"
+        ? jqXHR.getResponseHeader(name)
+        : null;
+    },
+    retryDelay: function (jqXHR, attempt) {
+      var rate = pd.rateLimit,
+        retryAfter = rate.responseHeader(jqXHR, "Retry-After"),
+        reset = parseFloat(rate.responseHeader(jqXHR, "X-Ratelimit-Reset")),
+        wait = 0;
+
+      if (retryAfter) {
+        if (/^\s*\d+(?:\.\d+)?\s*$/.test(retryAfter)) {
+          wait = parseFloat(retryAfter) * 1000;
+        } else {
+          var retryDate = Date.parse(retryAfter);
+          if (!isNaN(retryDate)) {
+            wait = retryDate - Date.now();
+          }
+        }
+      }
+
+      if (!(wait > 0) && !isNaN(reset) && reset > 0) {
+        wait = reset * 1000;
+      }
+
+      if (!(wait > 0)) {
+        wait = rate.baseBackoffMs * Math.pow(2, Math.max(0, attempt - 1));
+        if (rate.jitterRatio > 0) {
+          wait *= 1 + (Math.random() * 2 - 1) * rate.jitterRatio;
+        }
+      }
+
+      return Math.min(
+        rate.maxBackoffMs,
+        Math.max(rate.minBackoffMs, wait)
+      );
+    },
+    acquire: function () {
+      var rate = pd.rateLimit,
+        now = Date.now(),
+        startAt = Math.max(now, rate.penaltyUntil, rate.nextSlot),
+        wait = startAt - now;
+
+      rate.nextSlot = startAt + rate.intervalMs;
+      if (wait <= 0) {
+        return Promise.resolve();
+      }
+      return new Promise(function (resolve) {
+        setTimeout(resolve, wait);
+      });
+    },
+    noteSuccess: function (jqXHR) {
+      var rate = pd.rateLimit,
+        remaining = parseFloat(
+          rate.responseHeader(jqXHR, "X-Ratelimit-Remaining")
+        ),
+        reset = parseFloat(rate.responseHeader(jqXHR, "X-Ratelimit-Reset"));
+
+      rate.consecutive429 = 0;
+      rate.successStreak++;
+      if (rate.successStreak >= rate.recoverAfter) {
+        rate.intervalMs = rate.minIntervalMs;
+        rate.successStreak = 0;
+      }
+
+      if (!isNaN(remaining) && remaining <= rate.lowRemaining && !isNaN(reset)) {
+        if (remaining <= 0) {
+          rate.penaltyUntil = Math.max(
+            rate.penaltyUntil,
+            Date.now() + Math.max(0, reset) * 1000 + 1000
+          );
+          rate.nextSlot = Math.max(rate.nextSlot, rate.penaltyUntil);
+        }
+        rate.intervalMs = Math.min(
+          rate.maxIntervalMs,
+          rate.intervalMs * 2
+        );
+      }
+
+      if (rate.intervalMs > rate.minIntervalMs) {
+        pd.ui.status(
+          "Throttling requests to one every " +
+            Math.round(rate.intervalMs / 1000) +
+            "s after Reddit rate limiting."
+        );
+      } else {
+        pd.ui.status("");
+      }
+    },
+    noteRateLimited: function (jqXHR) {
+      var rate = pd.rateLimit,
+        wait;
+
+      rate.consecutive429++;
+      rate.successStreak = 0;
+      rate.intervalMs = Math.min(
+        rate.maxIntervalMs,
+        rate.intervalMs * 2
+      );
+      wait = rate.retryDelay(jqXHR, rate.consecutive429);
+      rate.penaltyUntil = Math.max(rate.penaltyUntil, Date.now() + wait);
+      rate.nextSlot = Math.max(rate.nextSlot, rate.penaltyUntil);
+      return wait;
+    },
+    request: function (options) {
+      var rate = pd.rateLimit;
+
+      return new Promise(function (resolve, reject) {
+        var attempt = 0;
+
+        function send() {
+          rate.acquire().then(function () {
+            $.ajax(options).done(function (data, textStatus, jqXHR) {
+              rate.noteSuccess(jqXHR);
+              resolve(data);
+            }).fail(function (jqXHR, textStatus, errorThrown) {
+              if (
+                jqXHR &&
+                jqXHR.status === 429 &&
+                attempt < rate.maxRetries
+              ) {
+                attempt++;
+                var wait = rate.noteRateLimited(jqXHR);
+                console.warn(
+                  "PowerDeleteSuite: HTTP 429, backing off for " +
+                    Math.round(wait / 1000) +
+                    "s (retry " +
+                    attempt +
+                    "/" +
+                    rate.maxRetries +
+                    ")"
+                );
+                pd.ui.status(
+                  "Rate limited by Reddit (HTTP 429). Waiting " +
+                    Math.max(1, Math.round(wait / 1000)) +
+                    "s before retrying (attempt " +
+                    attempt +
+                    "/" +
+                    rate.maxRetries +
+                    ")."
+                );
+                send();
+              } else {
+                reject({
+                  jqXHR: jqXHR,
+                  textStatus: textStatus,
+                  errorThrown: errorThrown,
+                });
+              }
+            });
+          }, reject);
+        }
+
+        send();
+      });
+    },
+  },
   actions: {
     page: {
       next: function () {
@@ -753,7 +926,7 @@ var pd = {
       },
       handle: function () {
         pd.task.pageCalls++;
-        $.ajax({
+        pd.rateLimit.request({
           url: pd.endpoints[pd.task.paths.sections[0]],
           data: {
             q:
@@ -798,13 +971,19 @@ var pd = {
               }
             }
           },
-          function () {
+          function (error) {
             pd.task.info.errors++;
             if (
               confirm(
                 "Error getting " +
                   pd.task.paths.sections[0] +
-                  " page. Would you like to retry?"
+                  " page" +
+                  pd.helpers.ajaxErrorMessage(
+                    error.jqXHR,
+                    error.textStatus,
+                    error.errorThrown
+                  ) +
+                  ". Would you like to retry?"
               )
             ) {
               pd.actions.page.handle();
@@ -929,7 +1108,7 @@ var pd = {
     delete: function (item) {
       setTimeout(() => {
         if (pd.performActions) {
-          $.ajax({
+          pd.rateLimit.request({
             url: "/api/del",
             method: "post",
             headers: pd.helpers.apiHeaders(),
@@ -944,13 +1123,17 @@ var pd = {
               pd.task.items[0].pdDeleted = true;
               pd.actions.children.handleSingle();
             },
-            function (jqXHR, textStatus, errorThrown) {
+            function (error) {
               pd.task.info.errors++;
               if (
                 confirm(
                   "Error deleting " +
                     (item.kind == "t3" ? "post" : "comment") +
-                    pd.helpers.ajaxErrorMessage(jqXHR, textStatus, errorThrown) +
+                    pd.helpers.ajaxErrorMessage(
+                      error.jqXHR,
+                      error.textStatus,
+                      error.errorThrown
+                    ) +
                     "\n\nWould you like to retry?"
                 )
               ) {
@@ -973,7 +1156,7 @@ var pd = {
         if (pd.performActions) {
           var editString = pd.task.config.editText ||
             pd.editStrings[Math.floor(Math.random() * pd.editStrings.length)];
-          $.ajax({
+          pd.rateLimit.request({
             url: "/api/editusertext",
             method: "post",
             headers: pd.helpers.apiHeaders(),
@@ -991,13 +1174,17 @@ var pd = {
               pd.task.items[0].pdEdited = true;
               pd.actions.children.handleSingle();
             },
-            function (jqXHR, textStatus, errorThrown) {
+            function (error) {
               pd.task.info.errors++;
               if (
                 !confirm(
                   "Error editing " +
                     (item.kind == "t3" ? "post" : "comment") +
-                    pd.helpers.ajaxErrorMessage(jqXHR, textStatus, errorThrown) +
+                    pd.helpers.ajaxErrorMessage(
+                      error.jqXHR,
+                      error.textStatus,
+                      error.errorThrown
+                    ) +
                     "\n\nWould you like to retry?"
                 )
               ) {
@@ -1014,6 +1201,17 @@ var pd = {
     },
   },
   ui: {
+    status: function (message) {
+      var status = $("#pd__status");
+      if (status.length === 0) {
+        status = $("<div id='pd__status' />").css({
+          margin: "0.5em 0",
+          color: "#a00",
+        });
+        $("#pd__central .processing").append(status);
+      }
+      status.text(message || "").toggle(!!message);
+    },
     updateDisplay: function () {
       $("#pd__central h2")
         .first()
@@ -1104,6 +1302,7 @@ var pd = {
       document.title = pd.config.user + " | " + pd.task.info.ajaxCalls;
     },
     done: function () {
+      pd.ui.status("");
       pd.ui.updateDisplay();
       window.pd_processing = false;
       document.title =
