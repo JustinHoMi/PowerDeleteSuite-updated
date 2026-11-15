@@ -61,9 +61,18 @@ function decodeCss(css) {
 }
 
 function bookmarkletUrl() {
-  const source = read(BOOKMARKLET).replace(/^javascript:\s*/, "");
-  const url = "javascript:" + encodeURIComponent(source);
-  if (decodeURIComponent(url.slice("javascript:".length)) !== source) {
+  const source = read(BOOKMARKLET)
+    .replace(/^javascript:\s*/, "")
+    .replace(/\r?\n\s*/g, " ")
+    .trim();
+  if (/\r|\n/.test(source)) {
+    fail("bookmarklet.js: bookmarklet source still contains a line break");
+  }
+  // Keep the install string readable. Only characters that would terminate or
+  // corrupt the URL are escaped; everything else stays as normal JavaScript.
+  const encoded = source.replace(/%/g, "%25").replace(/#/g, "%23");
+  const url = "javascript:" + encoded;
+  if (decodeURIComponent(encoded) !== source) {
     fail("bookmarklet.js: bookmarklet URL is not reversible");
   }
   return url;

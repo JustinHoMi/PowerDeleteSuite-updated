@@ -61,15 +61,18 @@ function decodedJavascriptPayloads(text) {
 }
 
 function checkRawHosts(file, text, payloads) {
+  // Generated JS-string constants escape their quotes. Unescape them so a
+  // concatenated URL prefix is not mistaken for a complete unpinned URL.
+  const scanText = text.replace(/\\"/g, '"');
   const rawUrlPattern = /https?:\/\/raw\.githubusercontent\.com\/[^\s"'`<>)\]]+/g;
-  for (const match of text.matchAll(rawUrlPattern)) {
+  for (const match of scanText.matchAll(rawUrlPattern)) {
     if (PINNED_RAW_URL.test(match[0])) continue;
     if (file === "bookmarklet.js") {
-      const line = text.slice(0, match.index).split("\n").length;
-      const lineText = text.split("\n")[line - 1].trim();
+      const line = scanText.slice(0, match.index).split("\n").length;
+      const lineText = scanText.split("\n")[line - 1].trim();
       if (lineText === '"https://raw.githubusercontent.com/" +') continue;
     }
-    violation(file, lineNumber(text, match.index), "unpinned raw GitHub URL");
+    violation(file, lineNumber(scanText, match.index), "unpinned raw GitHub URL");
   }
 
   for (const payload of payloads) {
