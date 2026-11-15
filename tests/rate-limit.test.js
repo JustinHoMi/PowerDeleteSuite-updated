@@ -91,6 +91,16 @@ function resetRateLimit(context) {
   return rate;
 }
 
+test("starts with four-second spacing and unlimited 429 retries", () => {
+  const context = makeContext();
+  const rate = context.pd.rateLimit;
+
+  assert.equal(rate.intervalMs, 4000);
+  assert.equal(rate.minIntervalMs, 4000);
+  assert.equal(rate.maxRetries, 0);
+  assert.equal(rate.shouldRetry(100), true);
+});
+
 test("retries a 429 automatically and resolves with the eventual response", async () => {
   const context = makeContext();
   const rate = resetRateLimit(context);
@@ -193,6 +203,65 @@ test("does not retry non-429 failures", async () => {
   assert.equal(error.jqXHR.status, 500);
   assert.equal(error.textStatus, "error");
   assert.equal(error.errorThrown, "Server Error");
+});
+
+test("retries Reddit RATELIMIT JSON errors returned with HTTP 200", async () => {
+  const context = makeContext();
+  const rate = resetRateLimit(context);
+  rate.maxRetries = 0;
+
+  const result = rate.request({ url: "/api/editusertext" });
+  await sleep(5);
+  context.calls[0].doneHandler(
+    {
+      json: {
+        errors: [
+          [
+            "RATELIMIT",
+            "you are doing that too much. try again in 0 minutes.",
+            "ratelimit",
+          ],
+        ],
+      },
+    },
+    "success",
+    jqXHR(200)
+  );
+  await sleep(30);
+  assert.equal(context.calls.length, 2);
+  context.calls[1].doneHandler({ json: { errors: [] } }, "success", jqXHR(200));
+
+  assert.deepEqual(await result, { json: { errors: [] } });
+});
+
+test("parses Reddit's retry hint from RATELIMIT messages", () => {
+  const context = makeContext();
+  const rate = resetRateLimit(context);
+
+  assert.equal(
+    rate.messageDelay("you are doing that too much. try again in 9 minutes."),
+    540000
+  );
+  assert.equal(rate.messageDelay("try again in 30 seconds."), 30000);
+  assert.equal(rate.messageDelay("no hint here"), 0);
+});
+
+test("keeps retrying 429s when maxRetries is zero", async () => {
+  const context = makeContext();
+  const rate = resetRateLimit(context);
+  rate.maxRetries = 0;
+
+  const result = rate.request({ url: "/api/del" });
+  for (let i = 0; i < 3; i++) {
+    await sleep(30);
+    assert.equal(context.calls.length, i + 1);
+    context.calls[i].failHandler(jqXHR(429), "error", "Too Many Requests");
+  }
+  await sleep(60);
+  assert.equal(context.calls.length, 4);
+  context.calls[3].doneHandler({ ok: true }, "success", jqXHR(200));
+
+  assert.deepEqual(await result, { ok: true });
 });
 
 test("pauses proactively when the rate-limit window is exhausted", () => {

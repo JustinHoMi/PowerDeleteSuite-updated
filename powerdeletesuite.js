@@ -1,5 +1,5 @@
 var pd = {
-  version: "1.4.12",
+  version: "1.4.13",
   bookmarkver: "1.4",
   editStrings: [
     "I love ice cream.",
@@ -715,14 +715,14 @@ var pd = {
     },
   },
   rateLimit: {
-    minIntervalMs: 2000,
+    minIntervalMs: 4000,
     maxIntervalMs: 60000,
-    intervalMs: 2000,
+    intervalMs: 4000,
     minBackoffMs: 5000,
     baseBackoffMs: 5000,
     maxBackoffMs: 900000,
     jitterRatio: 0.2,
-    maxRetries: 8,
+    maxRetries: 0,
     lowRemaining: 5,
     recoverAfter: 5,
     consecutive429: 0,
@@ -734,7 +734,33 @@ var pd = {
         ? jqXHR.getResponseHeader(name)
         : null;
     },
-    retryDelay: function (jqXHR, attempt) {
+    isRateLimitedResponse: function (data) {
+      var errors = data && data.json && data.json.errors;
+      if (!errors || !errors.length) {
+        return null;
+      }
+      for (var i = 0; i < errors.length; i++) {
+        if (errors[i] && /^RATELIMIT$/i.test(errors[i][0] || "")) {
+          return errors[i][1] || "Reddit rate limit";
+        }
+      }
+      return null;
+    },
+    messageDelay: function (message) {
+      var match = /try again in\s*(\d+)\s*(second|minute|hour)s?/i.exec(
+          message || ""
+        ),
+        units = { second: 1000, minute: 60000, hour: 3600000 };
+      if (!match) {
+        return 0;
+      }
+      return parseInt(match[1], 10) * (units[match[2].toLowerCase()] || 0);
+    },
+    shouldRetry: function (attempt) {
+      return pd.rateLimit.maxRetries === 0 ||
+        attempt < pd.rateLimit.maxRetries;
+    },
+    retryDelay: function (jqXHR, attempt, hintMs) {
       var rate = pd.rateLimit,
         retryAfter = rate.responseHeader(jqXHR, "Retry-After"),
         reset = parseFloat(rate.responseHeader(jqXHR, "X-Ratelimit-Reset")),
@@ -749,6 +775,10 @@ var pd = {
             wait = retryDate - Date.now();
           }
         }
+      }
+
+      if (!(wait > 0) && hintMs > 0) {
+        wait = hintMs;
       }
 
       if (!(wait > 0) && !isNaN(reset) && reset > 0) {
@@ -819,7 +849,7 @@ var pd = {
         pd.ui.status("");
       }
     },
-    noteRateLimited: function (jqXHR) {
+    noteRateLimited: function (jqXHR, hintMs) {
       var rate = pd.rateLimit,
         wait;
 
@@ -829,7 +859,7 @@ var pd = {
         rate.maxIntervalMs,
         rate.intervalMs * 2
       );
-      wait = rate.retryDelay(jqXHR, rate.consecutive429);
+      wait = rate.retryDelay(jqXHR, rate.consecutive429, hintMs);
       rate.penaltyUntil = Math.max(rate.penaltyUntil, Date.now() + wait);
       rate.nextSlot = Math.max(rate.nextSlot, rate.penaltyUntil);
       return wait;
@@ -840,43 +870,72 @@ var pd = {
       return new Promise(function (resolve, reject) {
         var attempt = 0;
 
+        function retryAfterRateLimit(jqXHR, hintMs, reason) {
+          attempt++;
+          var wait = rate.noteRateLimited(jqXHR, hintMs);
+          var attempts =
+            rate.maxRetries === 0
+              ? ""
+              : "/" + rate.maxRetries;
+          console.warn(
+            "PowerDeleteSuite: " +
+              reason +
+              ", backing off for " +
+              Math.round(wait / 1000) +
+              "s (retry " +
+              attempt +
+              attempts +
+              ")"
+          );
+          pd.ui.status(
+            "Rate limited by Reddit (" +
+              reason +
+              "). Waiting " +
+              Math.max(1, Math.round(wait / 1000)) +
+              "s before retrying (attempt " +
+              attempt +
+              attempts +
+              ")."
+          );
+          send();
+        }
+
         function send() {
           rate.acquire().then(function () {
             $.ajax(options).done(function (data, textStatus, jqXHR) {
+              var limitMessage = rate.isRateLimitedResponse(data);
+              if (limitMessage) {
+                if (rate.shouldRetry(attempt)) {
+                  retryAfterRateLimit(
+                    jqXHR,
+                    rate.messageDelay(limitMessage),
+                    limitMessage
+                  );
+                } else {
+                  reject({
+                    jqXHR: jqXHR,
+                    textStatus: textStatus,
+                    errorThrown: limitMessage,
+                    rateLimited: true,
+                  });
+                }
+                return;
+              }
               rate.noteSuccess(jqXHR);
               resolve(data);
             }).fail(function (jqXHR, textStatus, errorThrown) {
               if (
                 jqXHR &&
                 jqXHR.status === 429 &&
-                attempt < rate.maxRetries
+                rate.shouldRetry(attempt)
               ) {
-                attempt++;
-                var wait = rate.noteRateLimited(jqXHR);
-                console.warn(
-                  "PowerDeleteSuite: HTTP 429, backing off for " +
-                    Math.round(wait / 1000) +
-                    "s (retry " +
-                    attempt +
-                    "/" +
-                    rate.maxRetries +
-                    ")"
-                );
-                pd.ui.status(
-                  "Rate limited by Reddit (HTTP 429). Waiting " +
-                    Math.max(1, Math.round(wait / 1000)) +
-                    "s before retrying (attempt " +
-                    attempt +
-                    "/" +
-                    rate.maxRetries +
-                    ")."
-                );
-                send();
+                retryAfterRateLimit(jqXHR, 0, "HTTP 429");
               } else {
                 reject({
                   jqXHR: jqXHR,
                   textStatus: textStatus,
                   errorThrown: errorThrown,
+                  rateLimited: !!(jqXHR && jqXHR.status === 429),
                 });
               }
             });
@@ -1149,7 +1208,7 @@ var pd = {
           pd.task.after = pd.task.items[0].data.name;
           pd.actions.children.handleSingle();
         }
-      }, 5000);
+      }, 10000);
     },
     edit: function (item) {
       setTimeout(() => {
@@ -1197,7 +1256,7 @@ var pd = {
           pd.task.items[0].pdEdited = true;
           pd.actions.children.handleSingle();
         }
-      }, 5000);
+      }, 10000);
     },
   },
   ui: {
