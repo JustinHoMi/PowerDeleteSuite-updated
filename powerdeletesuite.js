@@ -239,13 +239,14 @@ var pd = {
         ) {
           if (
             confirm(
-              "There's been an update to the bookmarklet. Would you like to go to the Github repo in order to get the latest version?"
+              "There's been an update to the bookmarklet. Would you like to go to the canonical GitHub repository to get the current pinned version?"
             )
           ) {
             alert(
-              'Sadly, there]\'s no way to automatically update the bookmark. :/\nScroll down to the "Install PowerDeleteSuite" button on the github page. Replace your CURRENT bookmark with the one found there to install the latest bookmark.'
+              "A new pinned release requires replacing your current bookmark with the one from the canonical repository. The bookmarklet does not update itself."
             );
-            document.location.href = "https://github.com/j0be/PowerDeleteSuite";
+            document.location.href =
+              "https://github.com/JustinHoMi/PowerDeleteSuite-updated";
             return false;
           }
         }
@@ -259,20 +260,13 @@ var pd = {
         if (pd.version !== pd.prevRunVersion) {
           if (
             confirm(
-              "You've gotten the latest update! You are now running PowerDeleteSuite v" +
+              "You are now running PowerDeleteSuite v" +
                 pd.version +
-                ". Would you like to open the changelog in a new tab?"
+                ". Would you like to open the canonical repository in a new tab?"
             )
           ) {
-            $.ajax({ url: "/r/PowerDeleteSuite/new.json" }).then(
-              function (data) {
-                window.open(
-                  "https://reddit.com" + data.data.children[0].data.permalink
-                );
-              },
-              function () {
-                window.open("https://reddit.com/r/PowerDeleteSuite");
-              }
+            window.open(
+              "https://github.com/JustinHoMi/PowerDeleteSuite-updated"
             );
           }
         }
@@ -564,10 +558,25 @@ var pd = {
     },
     ajaxErrorMessage: function (jqXHR, textStatus, errorThrown) {
       var parts = [],
-        responseText =
-          jqXHR && jqXHR.responseText
-            ? $("<div>").html(jqXHR.responseText).text()
-            : "";
+        responseText = "";
+
+      if (jqXHR && jqXHR.responseText) {
+        var raw = jqXHR.responseText,
+          contentType =
+            jqXHR.getResponseHeader && jqXHR.getResponseHeader("Content-Type");
+        if (contentType && /json/i.test(contentType)) {
+          responseText = raw;
+        } else {
+          try {
+            responseText = new DOMParser().parseFromString(
+              raw,
+              "text/html"
+            ).body.textContent;
+          } catch (e) {
+            responseText = raw;
+          }
+        }
+      }
 
       if (jqXHR && jqXHR.status) {
         parts.push("HTTP " + jqXHR.status);
@@ -1124,20 +1133,13 @@ var pd = {
         pd.init();
       });
 
-      var numSubs = $("#pd__sub-list input:checked").length;
       $("#pd__sub-list input").prop("checked", false);
-      var debugInfo =
-        JSON.stringify($("#pd__form").serializeArray()) +
-        " number of subreddits: " +
-        numSubs;
 
       $("#pd__central .complete .goodbye").html(
         '<hr/><h3 class="submit-bug">' +
           "<div>Having trouble?</div>" +
-          '<div><a href="https://www.reddit.com/message/compose?to=j0be&subject=PowerDeleteSuite%20Config&message=' +
-          encodeURIComponent(debugInfo) +
-          '" target="_blank">Send /u/j0be a message with your current settings.</a></div>' +
-          "<div><small>(for privacy, subreddit list is not included)</small></div>" +
+          '<div><a href="https://github.com/JustinHoMi/PowerDeleteSuite-updated/issues" target="_blank">Report the problem on the canonical repository issue tracker.</a></div>' +
+          "<div><small>Do not include passwords, modhashes, or private content in public reports.</small></div>" +
           "</h3>"
       );
 
@@ -1155,7 +1157,7 @@ var pd = {
   },
   error: function () {
     var reset = confirm(
-      "We ran into an error. Why not tell /u/j0be what you were doing to break it?\r\n\r\nWould you like to restart the script?"
+      "We ran into an error. Please report it on the canonical repository issue tracker.\r\n\r\nWould you like to restart the script?"
     );
     window.pd_processing = false;
     if (reset) {
