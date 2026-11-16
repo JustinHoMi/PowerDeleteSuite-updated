@@ -264,6 +264,59 @@ test("keeps retrying 429s when maxRetries is zero", async () => {
   assert.deepEqual(await result, { ok: true });
 });
 
+test("routes edit and delete posts through the throttled retry path", async () => {
+  const context = makeContext();
+  const rate = resetRateLimit(context);
+  rate.maxRetries = 0;
+  const item = {
+    kind: "t1",
+    data: { name: "t1_abc", subreddit: "test" },
+  };
+  let handled = 0;
+
+  context.setTimeout = function (callback) {
+    callback();
+    return 0;
+  };
+  context.pd.performActions = true;
+  context.pd.config = { uh: "" };
+  context.pd.task = {
+    config: { editText: "edited" },
+    items: [item],
+    info: { errors: 0 },
+  };
+  context.pd.actions.children.handleSingle = function () {
+    handled++;
+  };
+
+  context.pd.actions.edit(item);
+  await sleep(10);
+  assert.equal(context.calls.length, 1);
+  assert.equal(context.calls[0].options.url, "/api/editusertext");
+  context.calls[0].failHandler(jqXHR(429), "error", "Too Many Requests");
+  await sleep(30);
+  assert.equal(context.calls.length, 2, "edit retry must go through the limiter");
+  assert.equal(context.calls[1].options.url, "/api/editusertext");
+  context.calls[1].doneHandler({}, "success", jqXHR(200));
+  await sleep(5);
+  assert.equal(item.pdEdited, true);
+
+  item.pdDeleted = false;
+  context.calls.length = 0;
+  context.pd.actions.delete(item);
+  await sleep(10);
+  assert.equal(context.calls.length, 1);
+  assert.equal(context.calls[0].options.url, "/api/del");
+  context.calls[0].failHandler(jqXHR(429), "error", "Too Many Requests");
+  await sleep(30);
+  assert.equal(context.calls.length, 2, "delete retry must go through the limiter");
+  assert.equal(context.calls[1].options.url, "/api/del");
+  context.calls[1].doneHandler({}, "success", jqXHR(200));
+  await sleep(5);
+  assert.equal(item.pdDeleted, true);
+  assert.equal(handled, 2);
+});
+
 test("pauses proactively when the rate-limit window is exhausted", () => {
   const context = makeContext();
   const rate = resetRateLimit(context);
