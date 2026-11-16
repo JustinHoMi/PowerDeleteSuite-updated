@@ -91,12 +91,12 @@ function resetRateLimit(context) {
   return rate;
 }
 
-test("starts with four-second spacing and unlimited 429 retries", () => {
+test("starts with eight-second spacing and unlimited 429 retries", () => {
   const context = makeContext();
   const rate = context.pd.rateLimit;
 
-  assert.equal(rate.intervalMs, 4000);
-  assert.equal(rate.minIntervalMs, 4000);
+  assert.equal(rate.intervalMs, 8000);
+  assert.equal(rate.minIntervalMs, 8000);
   assert.equal(rate.maxRetries, 0);
   assert.equal(rate.shouldRetry(100), true);
 });

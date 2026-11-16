@@ -1,5 +1,5 @@
 var pd = {
-  version: "1.4.13",
+  version: "1.4.14",
   bookmarkver: "1.4",
   editStrings: [
     "I love ice cream.",
@@ -715,9 +715,9 @@ var pd = {
     },
   },
   rateLimit: {
-    minIntervalMs: 4000,
+    minIntervalMs: 8000,
     maxIntervalMs: 60000,
-    intervalMs: 4000,
+    intervalMs: 8000,
     minBackoffMs: 5000,
     baseBackoffMs: 5000,
     maxBackoffMs: 900000,
@@ -1208,7 +1208,7 @@ var pd = {
           pd.task.after = pd.task.items[0].data.name;
           pd.actions.children.handleSingle();
         }
-      }, 10000);
+      }, 20000);
     },
     edit: function (item) {
       setTimeout(() => {
@@ -1256,7 +1256,7 @@ var pd = {
           pd.task.items[0].pdEdited = true;
           pd.actions.children.handleSingle();
         }
-      }, 10000);
+      }, 20000);
     },
   },
   ui: {
