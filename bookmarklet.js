@@ -2,9 +2,9 @@ javascript:
 (function () {
   window.bookmarkver = "1.4";
   var CANONICAL_REPO = "JustinHoMi/PowerDeleteSuite-updated";
-  var PINNED_REF = "5f9d65f117a1e689c3967c90df419c2cc6bd5263";
+  var PINNED_REF = "b10ee38fbb5ed5fdec5bf95c490ffd4abe8a326c";
   var SCRIPT_SHA256 =
-    "c6a17e775636b5b8f56cb0735e8f76e8f56868d52313eb2487d63427dd553773";
+    "e19e152eddd3415e69798cc378f84614cc4f435c5065b258be6caef29cc91067";
   var isReddit =
     document.location.hostname.split(".").slice(-2).join(".") === "reddit.com";
   var isOverview = document.location.href.match(/\/overview\b/);
