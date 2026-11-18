@@ -1,5 +1,5 @@
 var pd = {
-  version: "1.4.15",
+  version: "1.4.16",
   bookmarkver: "1.4",
   editStrings: [
     "I love ice cream.",
@@ -701,6 +701,24 @@ var pd = {
         $(".gt-toggle").not(":checked").change();
       }
     },
+    currentText: function (item) {
+      var text = item.kind == "t1" ? item.data.body : item.data.selftext;
+      return typeof text === "string" ? text : null;
+    },
+    editTextFor: function (item) {
+      if (pd.task.config.editText) {
+        return pd.task.config.editText;
+      }
+      var id = String(item.data.id || item.data.name || ""),
+        hash = 0;
+      for (var i = 0; i < id.length; i++) {
+        hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+      }
+      return pd.editStrings[hash % pd.editStrings.length];
+    },
+    isGoneText: function (text) {
+      return typeof text === "string" && /^\[(deleted|removed)\]$/i.test(text.trim());
+    },
     saveSettings: function () {
       if ($("#pd__remember").is(":checked")) {
         if (!$("#pd__subreddits").is(":checked")) {
@@ -1081,13 +1099,24 @@ var pd = {
           pd.actions.page.shift();
           pd.actions.page.next();
         } else if (shouldBeActedOn) {
+          var currentText = pd.helpers.currentText(item);
           if (
             !item.pdEdited &&
             (item.data.is_self || item.kind == "t1") &&
             pd.task.config.isEditing &&
             !pd.task.editedIds[item.data.id]
           ) {
-            pd.actions.edit(item);
+            var targetText = pd.helpers.editTextFor(item);
+            if (
+              pd.helpers.isGoneText(currentText) ||
+              (currentText !== null &&
+                currentText.trim() === targetText.trim())
+            ) {
+              pd.actions.children.finishItem();
+              pd.actions.children.handleGroup();
+            } else {
+              pd.actions.edit(item);
+            }
           } else if (
             !item.pdDeleted &&
             ((item.kind == "t3" && pd.task.config.isRemovingPosts) ||
@@ -1215,8 +1244,7 @@ var pd = {
     edit: function (item) {
       setTimeout(() => {
         if (pd.performActions) {
-          var editString = pd.task.config.editText ||
-            pd.editStrings[Math.floor(Math.random() * pd.editStrings.length)];
+          var editString = pd.helpers.editTextFor(item);
           pd.rateLimit.request({
             url: "/api/editusertext",
             method: "post",

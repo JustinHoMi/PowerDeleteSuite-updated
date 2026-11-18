@@ -13,10 +13,16 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function item(id) {
+function item(id, body, kind) {
   return {
-    kind: "t1",
-    data: { id: id, name: "t1_" + id, subreddit: "test", body: "hello" },
+    kind: kind || "t1",
+    data: {
+      id: id,
+      name: (kind || "t1") + "_" + id,
+      subreddit: "test",
+      body: body === undefined ? "hello" : body,
+      is_self: kind === "t3",
+    },
   };
 }
 
@@ -132,4 +138,55 @@ test("tracks edits across sections that list the same self post", async () => {
     },
   ]);
   assert.equal(context.edits.length, 1, "search results must not re-edit submissions");
+});
+
+test("skips items whose body already matches the target text", async () => {
+  const context = makeContext();
+
+  await sweep(context, [item("same", "edited")]);
+  assert.equal(context.edits.length, 0, "identical body must not be edited");
+  assert.equal(context.pd.task.info.edited, 0);
+
+  await sweep(context, [item("padded", "  edited \n")]);
+  assert.equal(context.edits.length, 0, "whitespace is trimmed before comparing");
+
+  await sweep(context, [item("diff", "original text")]);
+  assert.equal(context.edits.length, 1, "different body still gets edited");
+  assert.equal(context.edits[0].data.text, "edited");
+  assert.equal(context.pd.task.info.edited, 1);
+});
+
+test("skips deleted and removed content", async () => {
+  const context = makeContext();
+
+  await sweep(context, [item("gone", "[deleted]")]);
+  await sweep(context, [item("removed", " [Removed] ")]);
+  assert.equal(context.edits.length, 0, "gone content must not be edited");
+  assert.equal(context.pd.task.info.edited, 0);
+
+  await sweep(context, [item("missing", null)]);
+  assert.equal(context.edits.length, 1, "unknown body still gets edited");
+});
+
+test("uses a stable pseudo-random text per item", async () => {
+  const context = makeContext();
+  context.pd.task.config.editText = "";
+
+  const target = context.pd.helpers.editTextFor(item("abc"));
+  assert.ok(
+    context.pd.editStrings.indexOf(target) !== -1,
+    "default text comes from the junk strings"
+  );
+  assert.equal(
+    context.pd.helpers.editTextFor(item("abc")),
+    target,
+    "same id must always pick the same text"
+  );
+
+  await sweep(context, [item("abc", target)]);
+  assert.equal(context.edits.length, 0, "a previous run's junk text is recognized");
+
+  await sweep(context, [item("def", "genuine comment")]);
+  assert.equal(context.edits.length, 1);
+  assert.equal(context.edits[0].data.text, context.pd.helpers.editTextFor(item("def")));
 });
