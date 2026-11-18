@@ -1,5 +1,5 @@
 var pd = {
-  version: "1.4.14",
+  version: "1.4.15",
   bookmarkver: "1.4",
   editStrings: [
     "I love ice cream.",
@@ -398,6 +398,7 @@ var pd = {
       pd.exportIds = [];
       pd.task = {
         after: "",
+        editedIds: Object.create(null),
         info: {
           numPages: Math.min(
             ($("#pd__submissions").is(":checked") ? 8 : 0) +
@@ -1083,7 +1084,8 @@ var pd = {
           if (
             !item.pdEdited &&
             (item.data.is_self || item.kind == "t1") &&
-            pd.task.config.isEditing
+            pd.task.config.isEditing &&
+            !pd.task.editedIds[item.data.id]
           ) {
             pd.actions.edit(item);
           } else if (
@@ -1230,6 +1232,7 @@ var pd = {
             },
           }).then(
             function () {
+              pd.task.editedIds[item.data.id] = true;
               pd.task.items[0].pdEdited = true;
               pd.actions.children.handleSingle();
             },
@@ -1253,6 +1256,7 @@ var pd = {
             }
           );
         } else {
+          pd.task.editedIds[item.data.id] = true;
           pd.task.items[0].pdEdited = true;
           pd.actions.children.handleSingle();
         }

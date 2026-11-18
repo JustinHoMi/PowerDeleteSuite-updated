@@ -270,7 +270,7 @@ test("routes edit and delete posts through the throttled retry path", async () =
   rate.maxRetries = 0;
   const item = {
     kind: "t1",
-    data: { name: "t1_abc", subreddit: "test" },
+    data: { id: "abc", name: "t1_abc", subreddit: "test" },
   };
   let handled = 0;
 
@@ -282,6 +282,7 @@ test("routes edit and delete posts through the throttled retry path", async () =
   context.pd.config = { uh: "" };
   context.pd.task = {
     config: { editText: "edited" },
+    editedIds: Object.create(null),
     items: [item],
     info: { errors: 0 },
   };
