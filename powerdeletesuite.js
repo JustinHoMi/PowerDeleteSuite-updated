@@ -1,5 +1,5 @@
 var pd = {
-  version: "1.4.16",
+  version: "1.4.17",
   bookmarkver: "1.4",
   editStrings: [
     "I love ice cream.",
@@ -1112,8 +1112,8 @@ var pd = {
               (currentText !== null &&
                 currentText.trim() === targetText.trim())
             ) {
-              pd.actions.children.finishItem();
-              pd.actions.children.handleGroup();
+              pd.task.editedIds[item.data.id] = true;
+              pd.actions.children.handleSingle();
             } else {
               pd.actions.edit(item);
             }

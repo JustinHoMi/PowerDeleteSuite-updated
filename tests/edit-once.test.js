@@ -190,3 +190,27 @@ test("uses a stable pseudo-random text per item", async () => {
   assert.equal(context.edits.length, 1);
   assert.equal(context.edits[0].data.text, context.pd.helpers.editTextFor(item("def")));
 });
+
+test("still deletes items skipped by the edit step", async () => {
+  const same = makeContext();
+  same.pd.task.config.isRemovingComments = true;
+  await sweep(same, [item("same", "edited")]);
+  assert.deepEqual(
+    same.edits.map((request) => request.url),
+    ["/api/del"],
+    "matching body must skip the edit but still delete"
+  );
+  assert.equal(same.pd.task.info.edited, 0);
+  assert.equal(same.pd.task.info.deleted, 1);
+
+  const gone = makeContext();
+  gone.pd.task.config.isRemovingComments = true;
+  await sweep(gone, [item("removed", " [Removed] ")]);
+  assert.deepEqual(
+    gone.edits.map((request) => request.url),
+    ["/api/del"],
+    "removed content must still be deleted"
+  );
+  assert.equal(gone.pd.task.info.edited, 0);
+  assert.equal(gone.pd.task.info.deleted, 1);
+});
