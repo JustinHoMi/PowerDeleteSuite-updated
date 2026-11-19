@@ -446,15 +446,26 @@ var pd = {
           timeframes: ["all", "hour", "day", "week", "month", "year"],
         },
       };
+      var checkedSubs = $("#pd__sub-list input:checked")
+        .map(function () {
+          return String($(this).attr("data-sub") || "")
+            .trim()
+            .toLowerCase();
+        })
+        .get();
+
+      // A checked subreddit is an explicit request to limit the run. Do not
+      // silently drop that limit when the master checkbox is unchecked.
+      if (checkedSubs.length > 0) {
+        $("#pd__subreddits").prop("checked", true);
+      }
+
       pd.filters = {
         subs: {
-          enabled: $("#pd__subreddits").is(":checked"),
-          list: $(
-            "#pd__sub-list input" +
-              ($("#pd__subreddits").is(":checked") ? ":checked" : "")
-          ).map(function () {
-            return $(this).attr("data-sub");
-          }),
+          enabled:
+            checkedSubs.length > 0 ||
+            $("#pd__subreddits").is(":checked"),
+          list: checkedSubs,
         },
         score: {
           enabled: $("#pd__score").is(":checked"),
@@ -638,8 +649,12 @@ var pd = {
       var check = {
         subs:
           !pd.filters.subs.enabled ||
-          (pd.filters.subs.enabled &&
-            $.inArray(item.data.subreddit, pd.filters.subs.list) >= 0),
+          $.inArray(
+            String(item.data.subreddit || "")
+              .trim()
+              .toLowerCase(),
+            pd.filters.subs.list
+          ) >= 0,
         gold: !(pd.filters.gilded && item.data.gilded == 1),
         saved: !(pd.filters.saved && item.data.saved == true),
         mod: !(pd.filters.mod && item.data.distinguished != null),
@@ -697,6 +712,9 @@ var pd = {
           } else {
             $(selector).val(setting.value);
           }
+        }
+        if ($("#pd__sub-list input:checked").length > 0) {
+          $("#pd__subreddits").prop("checked", true);
         }
         $(".gt-toggle").not(":checked").change();
       }
@@ -1141,7 +1159,10 @@ var pd = {
         pd.task.info.deleted += pd.task.items[0].pdDeleted ? 1 : 0;
         pd.task.info.edited += pd.task.items[0].pdEdited ? 1 : 0;
         pd.task.info.ignored += pd.task.items[0].pdIgnored ? 1 : 0;
-        if (pd.task.config.isExporting && !pd.task.items[0].pdIgnored) {
+        if (
+          pd.task.config.isExporting &&
+          (pd.task.items[0].pdEdited || pd.task.items[0].pdDeleted)
+        ) {
           pd.actions.children.exportItem(pd.task.items[0]);
         }
         pd.task.items.splice(0, 1);
