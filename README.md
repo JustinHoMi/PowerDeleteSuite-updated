@@ -26,6 +26,8 @@ The original project is [j0be/PowerDeleteSuite](https://github.com/j0be/PowerDel
 - Sends the modhash as both the `uh` form field and the `X-Modhash` header for
   edit/delete API calls.
 - Shows the HTTP status and Reddit response text in edit/delete retry dialogs.
+- Can be stopped mid-run with the on-screen stop button. The summary still
+  offers the local backup download for items acted on before the stop.
 - Spaces API requests and automatically retries HTTP 429 responses with
   header-aware exponential backoff instead of stopping the run.
 - Retries Reddit's HTML 403 network-security block pages with capped backoff,
