@@ -58,6 +58,8 @@ function collection(items) {
 
 function makePage(subs, masterChecked) {
   const controls = {
+    "#pd__audit": control(false),
+    "#pd__audit-notice": { length: 0, text() {} },
     "#pd__export": control(false),
     "#pd__submissions": control(false),
     "#pd__comments": control(false),

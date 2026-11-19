@@ -14,7 +14,10 @@ The original project is [j0be/PowerDeleteSuite](https://github.com/j0be/PowerDel
    filters.
 5. When editing and deleting are both enabled, it edits before deleting.
 6. It can export filtered content without deleting it.
-7. It can remember non-sensitive preferences locally.
+7. It has an audit mode that reports what a run would edit, delete, or ignore
+   without changing anything, and still provides a backup of the items it
+   would have changed.
+8. It can remember non-sensitive preferences locally.
 
 ## Changes in this fork
 
@@ -28,6 +31,11 @@ The original project is [j0be/PowerDeleteSuite](https://github.com/j0be/PowerDel
 - Shows the HTTP status and Reddit response text in edit/delete retry dialogs.
 - Can be stopped mid-run with the on-screen stop button. The summary still
   offers the local backup download for items acted on before the stop.
+- Adds an audit mode that never calls `/api/del` or `/api/editusertext`. It
+  walks the same pages with the same filters, then reports how many items it
+  would edit, delete, or ignore. Items that would be edited or deleted are
+  always added to the local backup, and the completion screen offers that
+  backup for download.
 - Spaces API requests and automatically retries HTTP 429 responses with
   header-aware exponential backoff instead of stopping the run.
 - Retries Reddit's HTML 403 network-security block pages with capped backoff,

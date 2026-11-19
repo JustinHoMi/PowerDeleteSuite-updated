@@ -1,5 +1,5 @@
 var pd = {
-  version: "1.4.19",
+  version: "1.4.20",
   bookmarkver: "1.4",
   editStrings: [
     "I love ice cream.",
@@ -396,6 +396,17 @@ var pd = {
       window.pd_processing = true;
       pd.exportItems = [];
       pd.exportIds = [];
+      var isAudit = $("#pd__audit").is(":checked");
+      if (isAudit) {
+        pd.setup.auditLabels();
+      }
+      if ($("#pd__audit-notice").length) {
+        $("#pd__audit-notice").text(
+          isAudit
+            ? "Audit mode: nothing will be edited or deleted. Items that would be edited or deleted are added to the local backup."
+            : ""
+        );
+      }
       pd.task = {
         after: "",
         stopped: false,
@@ -429,6 +440,7 @@ var pd = {
           },
         },
         config: {
+          isAudit: isAudit,
           isExporting: $("#pd__export").is(":checked"),
           isRemovingPosts: $("#pd__submissions").is(":checked"),
           isRemovingComments: $("#pd__comments").is(":checked"),
@@ -499,6 +511,16 @@ var pd = {
         "month",
         "year",
       ];
+    },
+    auditLabels: function () {
+      var captions = {
+        edited: "would be edited",
+        deleted: "would be deleted",
+        exported: "backed up",
+      };
+      for (var key in captions) {
+        $(".progress__byline ." + key + " .caption").text(captions[key]);
+      }
     },
     bindUI: function () {
       $("#pd__form").submit(function (e) {
@@ -618,6 +640,22 @@ var pd = {
       return parts.length ? " (" + parts.join(" - ") + ")" : "";
     },
     validate: function () {
+      if (pd.task.config.isAudit) {
+        if (
+          !(
+            pd.task.config.isRemovingPosts ||
+            pd.task.config.isEditing ||
+            pd.task.config.isRemovingComments
+          )
+        ) {
+          return {
+            valid: false,
+            reason:
+              "Audit mode reports what the selected actions would do. Select at least one of Remove submissions, Remove comments, or Edit comments / self posts to audit.",
+          };
+        }
+        return { valid: true, reason: "valid" };
+      }
       if (pd.task.config.isEditing && pd.task.config.editText === "") {
         var confirmEmptyEdit = window.confirm(
           "You have not entered any text to edit your posts to; junk text will be used instead."
@@ -1300,6 +1338,8 @@ var pd = {
             ) {
               pd.task.editedIds[item.data.id] = true;
               pd.actions.children.handleSingle();
+            } else if (pd.task.config.isAudit) {
+              pd.actions.auditEdit(item);
             } else {
               pd.actions.edit(item);
             }
@@ -1308,7 +1348,11 @@ var pd = {
             ((item.kind == "t3" && pd.task.config.isRemovingPosts) ||
               (item.kind == "t1" && pd.task.config.isRemovingComments))
           ) {
-            pd.actions.delete(item);
+            if (pd.task.config.isAudit) {
+              pd.actions.auditDelete(item);
+            } else {
+              pd.actions.delete(item);
+            }
           } else {
             pd.actions.children.finishItem();
             pd.actions.children.handleGroup();
@@ -1328,7 +1372,7 @@ var pd = {
         pd.task.info.edited += pd.task.items[0].pdEdited ? 1 : 0;
         pd.task.info.ignored += pd.task.items[0].pdIgnored ? 1 : 0;
         if (
-          pd.task.config.isExporting &&
+          (pd.task.config.isExporting || pd.task.config.isAudit) &&
           (pd.task.items[0].pdEdited || pd.task.items[0].pdDeleted)
         ) {
           pd.actions.children.exportItem(pd.task.items[0]);
@@ -1383,6 +1427,15 @@ var pd = {
           pd.task.info.exported++;
         }
       },
+    },
+    auditEdit: function (item) {
+      pd.task.editedIds[item.data.id] = true;
+      pd.task.items[0].pdEdited = true;
+      pd.actions.children.handleSingle();
+    },
+    auditDelete: function (item) {
+      pd.task.items[0].pdDeleted = true;
+      pd.actions.children.handleSingle();
     },
     delete: function (item) {
       var timer = setTimeout(() => {
@@ -1615,7 +1668,30 @@ var pd = {
         $("#pd__central .complete .summary").html(
           "<p>Stopped after making " +
             pd.task.info.ajaxCalls +
-            ' calls to the reddit servers.</p> <p>If you need to re run the script, <a class="restart">click here to go back to the beginning!</a></p>'
+            " calls to the reddit servers." +
+            (pd.task.config.isAudit
+              ? " Audit mode: no posts or comments were edited or deleted."
+              : "") +
+            '</p> <p>If you need to re run the script, <a class="restart">click here to go back to the beginning!</a></p>'
+        );
+      } else if (pd.task.config.isAudit) {
+        $("#pd__central .complete .summary").html(
+          "<p>Audit complete. No posts or comments were edited or deleted.</p>" +
+            "<p><b>" +
+            pd.task.info.edited +
+            "</b> would be edited, <b>" +
+            pd.task.info.deleted +
+            "</b> would be deleted, and <b>" +
+            pd.task.info.ignored +
+            "</b> were ignored." +
+            (pd.task.info.errors > 0
+              ? " " + pd.task.info.errors + " requests failed."
+              : "") +
+            "</p>" +
+            (pd.exportItems.length > 0
+              ? "<p>Every item that would be edited or deleted is in the backup below.</p>"
+              : "") +
+            ' <p>If you need to re run the script, <a class="restart">click here to go back to the beginning!</a></p>'
         );
       } else if (
         pd.task.info.edited + pd.task.info.deleted > 0 ||
@@ -1647,11 +1723,16 @@ var pd = {
           "</h3>"
       );
 
-      if (pd.task.config.isExporting && pd.exportItems.length > 0) {
+      if (
+        (pd.task.config.isExporting || pd.task.config.isAudit) &&
+        pd.exportItems.length > 0
+      ) {
         $("#pd__central .complete .goodbye").prepend(
           '<hr/><a class="export-button" href=\'data:text/csv;charset=utf-8,' +
             pd.exportItems.join("%0A") +
-            '\' download="PowerDeleteSuiteExport.csv">Download Exported Items</a>'
+            '\' download="PowerDeleteSuiteExport.csv">Download ' +
+            (pd.task.config.isAudit ? "Audit Backup" : "Exported Items") +
+            "</a>"
         );
       }
 
@@ -1673,7 +1754,7 @@ var pd = {
   debugging: false,
 };
 // BEGIN GENERATED ASSETS (scripts/build.js)
-pd.stylesheet = "/* CSS FOR USERSCRIPT */\n\n#pd__central {\n    background: #fff;\n    border: 1px solid #ddd;\n    border-radius: 1em;\n    line-height: 2em;\n    margin: 20px;\n    margin-right: 320px;\n    padding: 20px;\n}\n\n.goodbye::after,\n.goodbye2::after,\n#pd__central::after {\n    content: \"\";\n    clear: left;\n    display: block;\n}\n\n.goodbye2 {\n    display: none;\n}\n\n.complete[style*=\"block\"] .goodbye2 {\n    display: block;\n}\n\n.submit-bug {\n    float: left;\n    width: 50%;\n    padding: 20px;\n    box-sizing: border-box;\n}\n\n.faq {\n    float: left;\n    width: 50%;\n}\n\n.faq blockquote {\n    border-left: 3px solid #09f;\n    padding-left: 1.2em;\n    margin: .5em 0;\n}\n.faq p {\n    line-height: 1.1em;\n    text-indent: 1.5em;\n}\n\n.xt {\n    display: none;\n}\n.xt:checked~.xtr-section {\n    display: block;\n}\n.xt~label::after {\n    color: #09f;\n    content: \"+\";\n    font-weight: bold;\n    margin-left: .2em;\n}\n.xt:checked~label::after {\n    content: \"-\";\n}\n.xt.xtr {\n    display: inline-block;\n}\n.ind {\n    margin-left: 1em !important;\n}\n#pd__central input[type=\"checkbox\"] {\n    margin-right: .5em;\n    position: relative;\n    top: 3px;\n}\nb.m {\n    color: #590;\n    margin-right: .4em;\n}\n#pd__central a {\n    cursor: pointer;\n}\n.xtr-section {\n    background: #eee;\n    display: none;\n    max-height: 20em;\n    overflow-y: auto;\n    padding: .5em 1em;\n}\n#pd__central textarea {\n    min-height: 3em;\n    min-width: 200px;\n    width: 50%;\n}\n#pd__central .label {\n    display: block;\n    text-align: center;\n}\n#pd__central .progress {\n    border: 1px solid #ccc;\n    border-radius: 0.5em;\n    height: 2em;\n    margin-bottom: 1em;\n    position: relative;\n}\n#pd__central .bar,\n#pd__central .text {\n    display: block;\n    height: 100%;\n    left: 0;\n    position: absolute;\n    top: 0;\n}\n#pd__central .bar {\n    background: #def;\n    z-index: 0;\n}\n#pd__central .text {\n    text-align: center;\n    width: 100%;\n    z-index: 1;\n}\n\n#pd__central .text::before {\n    content: attr(data-top)\"/\"attr(data-bottom);\n}\n\n.processing {\n    display: none;\n}\n\n.xtr-section a {\n    text-decoration: underline;\n}\n\n.xtr-section a.disabled, \n.xtr-section a.loading {\n    color: #999;\n}\n\n.gt-toggle+label {\n    cursor: pointer;\n    border-bottom: 1px dashed #333;\n}\n\n.gt-toggle+label::before {\n    content:\"Less than\";\n}\n.gt-toggle.greater+label::before {\n    content:\"Greater than\";\n}\n\n#pd__date-selector .gt-toggle+label::before {\n    content:\"Older than\";\n}\n#pd__date-selector .gt-toggle.greater+label::before {\n    content:\"Newer than\";\n}\n\n\n.hidden {\n    display: none;\n}\n\n/* Subreddit Style */\n\n.linkflairlabel {\n    max-width: none !important;\n}\n.titlebox a {\n  color: ##64b2ff;\n  text-decoration: underline;\n}\n.side {\n  position: relative;\n  padding-left: 20px;\n  z-index: 15;\n}\n\n.listing-page .stickied+.clearleft+.linkflair-old,\n.listing-page .stickied+.linkflair-old {\n  margin-top: 80px;\n  position: relative;\n  overflow: visible !important;\n}\n\n\n.listing-page .stickied+.clearleft+.linkflair-old::before,\n.listing-page .stickied+.linkflair-old::before {\n  content: \"Old Versions\";\n  display: block;\n  position: absolute;\n  top: -2em;\n  left: 0;\n  font-weight: bold;\n  font-size: 14px;\n  border-bottom: 1px solid;\n  width: 100%;\n}\n\n.debugging {\n    display: none;\n}\n\n.progress__byline {\n    display: table;\n    border-collapse: collapse;\n    width: 100%;\n    margin-top: 2em;\n}\n\n.progress__byline .row {\n    display: table-row;\n    width: 100%;\n}\n\n.progress__byline .row .type {\n    display: none;\n    border-top: 1px solid #ccc;\n    text-align: center;\n    font-size: 10px;\n}\n\n.progress__byline .row .type.visible {\n    display: table-cell;\n}\n\n.progress__byline .row .type .num::before {\n    content: attr(data-num);\n}\n\n.progress__byline .num {\n    display: block;\n    font-weight: bold;\n    font-size: 1.2em;\n}\n\n.progress__byline .ignored .reasons {\n    margin: 0;\n    padding: 0;\n    line-height: 1em;\n    color: #999;\n}\n.progress__byline .ignored .reasons *::after {\n    content: attr(data-num);\n}\n\n#progress__item-output.onecol>div {\n    width: 100%;\n}\n\n#progress__item-output.twocol>div {\n    float: left;\n    width: 50%;\n}\n\n#progress__item-output::after {\n    content: \"\";\n    display: block;\n    clear: both;\n}\n\n#progress__item-output a {\n    display: block;\n}\n\n#pd__central hr {\n    margin: 2em 0 1em;\n}\n\n.stop-row {\n    margin-top: 1.5em;\n    text-align: center;\n}\n\n#pd__stop {\n    cursor: pointer;\n    font-size: 14px;\n    padding: .4em 1.2em;\n}\n\n#pd__stop[disabled] {\n    cursor: default;\n    opacity: .6;\n}\n\n.export-button {\n    display: block;\n    width: 250px;\n    text-align: center;\n    background: #09f;\n    color: #fff;\n    font-size: 14px;\n    padding: 5px;\n    margin: 0 auto;\n    border-radius: 4px;\n    font-weight: bold;\n}";
-pd.centralForm = "<h2>Power Delete Suite</h2>\n<form id=\"pd__form\">\n  <p>\n    Please review all options before pressing \"Process\". This process is <b>NOT</b> reversible.\n  </p>\n  <hr/>\n  \n  <h3>Actions to perform</h3>\n  <div><input checked type=\"checkbox\" id=\"pd__export\" name=\"pd__export\"><label for=\"pd__export\">Prepare local backup of items</label></div>\n  <div><input checked type=\"checkbox\" id=\"pd__submissions\" name=\"pd__submissions\"><label for=\"pd__submissions\">Remove submissions</label></div>\n  <div><input checked type=\"checkbox\" id=\"pd__comments\" name=\"pd__comments\"><label for=\"pd__comments\">Remove comments</label></div>\n  <div data-help=\"If editing is enabled at the same time as deleting, the item will be edited BEFORE deleting it.\">\n    <input class=\"xt xtr\" type=\"checkbox\" id=\"pd__comments-edit\" name=\"pd__comments-edit\"><label for=\"pd__comments-edit\">Edit comments / self posts</label><a class=\"pd__q\">?</a>\n    <div id=\"edit-form\" class=\"xt xtr-section\">\n      <textarea placeholder=\"Enter text to edit comments or self posts to.\" id=\"pd__comments-edit-text\" name=\"pd__comments-edit-text\"></textarea>\n    </div>\n  </div>\n  <hr/>\n\n  <h3>Filters</h3>\n  <div>\n    <input class=\"xt xtr\" type=\"checkbox\" id=\"pd__subreddits\" name=\"pd__subreddits\"><label for=\"pd__subreddits\">Filter by subreddits</label>\n    <div id=\"pd__sub-list\" class=\"xt xtr-section\">\n      <b>Perform actions on any subreddit that is checked:</b>\n    </div>\n  </div>\n  <div>\n    <input class=\"xt xtr\" type=\"checkbox\" id=\"pd__score\" name=\"pd__score\"><label for=\"pd__score\">Filter by score</label>\n    <div id=\"pd__score-selector\" class=\"xtr-section\">\n      <div><b>Perform actions on items with a score:</b></div>\n      <input class=\"gt-toggle hidden greater\" id=\"pd__score-dirtoggle\" name=\"pd__score-dirtoggle\" type=\"checkbox\" checked /><label for=\"pd__score-dirtoggle\" title=\"toggle\"></label> <input id=\"pd__score-num\" type=\"tel\" placeholder=\"200\" name=\"pd__score-num\" class=\"num-only\"/>\n    </div>\n  </div>\n  <div>\n    <input class=\"xt xtr\" type=\"checkbox\" id=\"pd__date\" name=\"pd__date\"><label for=\"pd__date\">Filter by date</label>\n    <div id=\"pd__date-selector\" class=\"xtr-section\">\n      <div><b>Perform actions on items with a date time:</b></div>\n      <input class=\"gt-toggle hidden greater\" id=\"pd__date-dirtoggle\" name=\"pd__date-dirtoggle\" type=\"checkbox\" checked /><label for=\"pd__date-dirtoggle\" title=\"toggle\"></label> <input id=\"pd__date-num\" type=\"tel\" placeholder=\"60\" value=\"60\" name=\"pd__date-num\" class=\"num-only\"/> <span>minutes ago</span>\n       <div>Set to: <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"60\">1 hour</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"1440\">1 day</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"10080\">1 week</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"43200\">30 days</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"262800\">half year</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"525600\">year</a></div>\n    </div>\n  </div>\n  <div><input checked type=\"checkbox\" id=\"pd__gilded\" name=\"pd__gilded\"><label for=\"pd__gilded\">Do not perform actions on gilded</label></div>\n  <div><input checked type=\"checkbox\" id=\"pd__saved\" name=\"pd__saved\"><label for=\"pd__saved\">Do not perform actions on saved</label></div>\n  <div><input checked type=\"checkbox\" id=\"pd__mod\" name=\"pd__mod\"><label for=\"pd__mod\">Do not perform actions on mod distinguished</label></div>\n  <hr/>\n  <div>\n    <button>Process</button><input checked type=\"checkbox\" id=\"pd__remember\" name=\"pd__remember\" class=\"ind\"><label for=\"pd__remember\" data-help=\"This will store data on your local computer. It will NOT transmit any of this data.\">Remember Settings<a class=\"pd__q\">?</a></label>\n  </div>\n</form>\n\n\n<div class=\"processing\">\n  <span class=\"label\">Page Progress</span>\n  <div id=\"progress_page\" class=\"progress\">\n    <span class=\"bar\"></span>\n    <span class=\"text\" data-top=\"\" data-bottom=\"\"></span>\n  </div>\n  <span class=\"label\">Page Item Progress</span>\n  <div id=\"progress_item\" class=\"progress\">\n    <span class=\"bar\"></span>\n    <span class=\"text\" data-top=\"\" data-bottom=\"\"></span>\n  </div>\n  <div class=\"progress__byline\"><div class=\"row\">\n     <span class=\"type errors\"><span class=\"num\" data-num=\"\"></span> errors</span>\n     <span class=\"type exported\"><span class=\"num\" data-num=\"\"></span> exported</span>\n     <span class=\"type edited\"><span class=\"num\" data-num=\"\"></span> edited</span>\n     <span class=\"type deleted\"><span class=\"num\" data-num=\"\"></span> deleted</span>\n     <span class=\"type ignored\"><span class=\"num\" data-num=\"\"></span> ignored<span class=\"reasons\"></span></span>\n  </div></div>\n  <div class=\"stop-row\"><button id=\"pd__stop\" type=\"button\">Stop processing</button></div>\n</div>\n\n\n<div class=\"complete\">\n  <div class=\"summary\"></div>\n  <div class=\"progress__byline\"><div class=\"row\">\n     <span class=\"type errors\"><span class=\"num\" data-num=\"\"></span> errors</span>\n     <span class=\"type exported\"><span class=\"num\" data-num=\"\"></span> exported</span>\n     <span class=\"type edited\"><span class=\"num\" data-num=\"\"></span> edited</span>\n     <span class=\"type deleted\"><span class=\"num\" data-num=\"\"></span> deleted</span>\n     <span class=\"type ignored\"><span class=\"num\" data-num=\"\"></span> ignored<span class=\"reasons\"></span></span>\n  </div></div>\n  <div class=\"goodbye\"></div>\n</div>";
+pd.stylesheet = "/* CSS FOR USERSCRIPT */\n\n#pd__central {\n    background: #fff;\n    border: 1px solid #ddd;\n    border-radius: 1em;\n    line-height: 2em;\n    margin: 20px;\n    margin-right: 320px;\n    padding: 20px;\n}\n\n.goodbye::after,\n.goodbye2::after,\n#pd__central::after {\n    content: \"\";\n    clear: left;\n    display: block;\n}\n\n.goodbye2 {\n    display: none;\n}\n\n.complete[style*=\"block\"] .goodbye2 {\n    display: block;\n}\n\n.submit-bug {\n    float: left;\n    width: 50%;\n    padding: 20px;\n    box-sizing: border-box;\n}\n\n.faq {\n    float: left;\n    width: 50%;\n}\n\n.faq blockquote {\n    border-left: 3px solid #09f;\n    padding-left: 1.2em;\n    margin: .5em 0;\n}\n.faq p {\n    line-height: 1.1em;\n    text-indent: 1.5em;\n}\n\n.xt {\n    display: none;\n}\n.xt:checked~.xtr-section {\n    display: block;\n}\n.xt~label::after {\n    color: #09f;\n    content: \"+\";\n    font-weight: bold;\n    margin-left: .2em;\n}\n.xt:checked~label::after {\n    content: \"-\";\n}\n.xt.xtr {\n    display: inline-block;\n}\n.ind {\n    margin-left: 1em !important;\n}\n#pd__central input[type=\"checkbox\"] {\n    margin-right: .5em;\n    position: relative;\n    top: 3px;\n}\nb.m {\n    color: #590;\n    margin-right: .4em;\n}\n#pd__central a {\n    cursor: pointer;\n}\n.xtr-section {\n    background: #eee;\n    display: none;\n    max-height: 20em;\n    overflow-y: auto;\n    padding: .5em 1em;\n}\n#pd__central textarea {\n    min-height: 3em;\n    min-width: 200px;\n    width: 50%;\n}\n#pd__central .label {\n    display: block;\n    text-align: center;\n}\n#pd__central .progress {\n    border: 1px solid #ccc;\n    border-radius: 0.5em;\n    height: 2em;\n    margin-bottom: 1em;\n    position: relative;\n}\n#pd__central .bar,\n#pd__central .text {\n    display: block;\n    height: 100%;\n    left: 0;\n    position: absolute;\n    top: 0;\n}\n#pd__central .bar {\n    background: #def;\n    z-index: 0;\n}\n#pd__central .text {\n    text-align: center;\n    width: 100%;\n    z-index: 1;\n}\n\n#pd__central .text::before {\n    content: attr(data-top)\"/\"attr(data-bottom);\n}\n\n.processing {\n    display: none;\n}\n\n.xtr-section a {\n    text-decoration: underline;\n}\n\n.xtr-section a.disabled, \n.xtr-section a.loading {\n    color: #999;\n}\n\n.gt-toggle+label {\n    cursor: pointer;\n    border-bottom: 1px dashed #333;\n}\n\n.gt-toggle+label::before {\n    content:\"Less than\";\n}\n.gt-toggle.greater+label::before {\n    content:\"Greater than\";\n}\n\n#pd__date-selector .gt-toggle+label::before {\n    content:\"Older than\";\n}\n#pd__date-selector .gt-toggle.greater+label::before {\n    content:\"Newer than\";\n}\n\n\n.hidden {\n    display: none;\n}\n\n/* Subreddit Style */\n\n.linkflairlabel {\n    max-width: none !important;\n}\n.titlebox a {\n  color: ##64b2ff;\n  text-decoration: underline;\n}\n.side {\n  position: relative;\n  padding-left: 20px;\n  z-index: 15;\n}\n\n.listing-page .stickied+.clearleft+.linkflair-old,\n.listing-page .stickied+.linkflair-old {\n  margin-top: 80px;\n  position: relative;\n  overflow: visible !important;\n}\n\n\n.listing-page .stickied+.clearleft+.linkflair-old::before,\n.listing-page .stickied+.linkflair-old::before {\n  content: \"Old Versions\";\n  display: block;\n  position: absolute;\n  top: -2em;\n  left: 0;\n  font-weight: bold;\n  font-size: 14px;\n  border-bottom: 1px solid;\n  width: 100%;\n}\n\n#pd__audit-notice {\n    background: #fff8d6;\n    border: 1px solid #e2c65c;\n    border-radius: 4px;\n    line-height: 1.4em;\n    padding: .5em 1em;\n}\n\n#pd__audit-notice:empty {\n    display: none;\n}\n\n#pd__audit-notice {\n    margin: 0 0 1em;\n}\n\n.debugging {\n    display: none;\n}\n\n.progress__byline {\n    display: table;\n    border-collapse: collapse;\n    width: 100%;\n    margin-top: 2em;\n}\n\n.progress__byline .row {\n    display: table-row;\n    width: 100%;\n}\n\n.progress__byline .row .type {\n    display: none;\n    border-top: 1px solid #ccc;\n    text-align: center;\n    font-size: 10px;\n}\n\n.progress__byline .row .type.visible {\n    display: table-cell;\n}\n\n.progress__byline .row .type .num::before {\n    content: attr(data-num);\n}\n\n.progress__byline .num {\n    display: block;\n    font-weight: bold;\n    font-size: 1.2em;\n}\n\n.progress__byline .ignored .reasons {\n    margin: 0;\n    padding: 0;\n    line-height: 1em;\n    color: #999;\n}\n.progress__byline .ignored .reasons *::after {\n    content: attr(data-num);\n}\n\n#progress__item-output.onecol>div {\n    width: 100%;\n}\n\n#progress__item-output.twocol>div {\n    float: left;\n    width: 50%;\n}\n\n#progress__item-output::after {\n    content: \"\";\n    display: block;\n    clear: both;\n}\n\n#progress__item-output a {\n    display: block;\n}\n\n#pd__central hr {\n    margin: 2em 0 1em;\n}\n\n.stop-row {\n    margin-top: 1.5em;\n    text-align: center;\n}\n\n#pd__stop {\n    cursor: pointer;\n    font-size: 14px;\n    padding: .4em 1.2em;\n}\n\n#pd__stop[disabled] {\n    cursor: default;\n    opacity: .6;\n}\n\n.export-button {\n    display: block;\n    width: 250px;\n    text-align: center;\n    background: #09f;\n    color: #fff;\n    font-size: 14px;\n    padding: 5px;\n    margin: 0 auto;\n    border-radius: 4px;\n    font-weight: bold;\n}";
+pd.centralForm = "<h2>Power Delete Suite</h2>\n<form id=\"pd__form\">\n  <p>\n    Please review all options before pressing \"Process\". This process is <b>NOT</b> reversible.\n  </p>\n  <hr/>\n  \n  <h3>Actions to perform</h3>\n  <div data-help=\"Audit mode walks the same pages and applies the same filters, but never edits or deletes anything. It reports how many items it would edit, delete, or ignore. Items that would be edited or deleted are always added to the local backup.\">\n    <input type=\"checkbox\" id=\"pd__audit\" name=\"pd__audit\"><label for=\"pd__audit\">Audit mode (report what would happen, change nothing)</label><a class=\"pd__q\">?</a>\n  </div>\n  <div><input checked type=\"checkbox\" id=\"pd__export\" name=\"pd__export\"><label for=\"pd__export\">Prepare local backup of items</label></div>\n  <div><input checked type=\"checkbox\" id=\"pd__submissions\" name=\"pd__submissions\"><label for=\"pd__submissions\">Remove submissions</label></div>\n  <div><input checked type=\"checkbox\" id=\"pd__comments\" name=\"pd__comments\"><label for=\"pd__comments\">Remove comments</label></div>\n  <div data-help=\"If editing is enabled at the same time as deleting, the item will be edited BEFORE deleting it.\">\n    <input class=\"xt xtr\" type=\"checkbox\" id=\"pd__comments-edit\" name=\"pd__comments-edit\"><label for=\"pd__comments-edit\">Edit comments / self posts</label><a class=\"pd__q\">?</a>\n    <div id=\"edit-form\" class=\"xt xtr-section\">\n      <textarea placeholder=\"Enter text to edit comments or self posts to.\" id=\"pd__comments-edit-text\" name=\"pd__comments-edit-text\"></textarea>\n    </div>\n  </div>\n  <hr/>\n\n  <h3>Filters</h3>\n  <div>\n    <input class=\"xt xtr\" type=\"checkbox\" id=\"pd__subreddits\" name=\"pd__subreddits\"><label for=\"pd__subreddits\">Filter by subreddits</label>\n    <div id=\"pd__sub-list\" class=\"xt xtr-section\">\n      <b>Perform actions on any subreddit that is checked:</b>\n    </div>\n  </div>\n  <div>\n    <input class=\"xt xtr\" type=\"checkbox\" id=\"pd__score\" name=\"pd__score\"><label for=\"pd__score\">Filter by score</label>\n    <div id=\"pd__score-selector\" class=\"xtr-section\">\n      <div><b>Perform actions on items with a score:</b></div>\n      <input class=\"gt-toggle hidden greater\" id=\"pd__score-dirtoggle\" name=\"pd__score-dirtoggle\" type=\"checkbox\" checked /><label for=\"pd__score-dirtoggle\" title=\"toggle\"></label> <input id=\"pd__score-num\" type=\"tel\" placeholder=\"200\" name=\"pd__score-num\" class=\"num-only\"/>\n    </div>\n  </div>\n  <div>\n    <input class=\"xt xtr\" type=\"checkbox\" id=\"pd__date\" name=\"pd__date\"><label for=\"pd__date\">Filter by date</label>\n    <div id=\"pd__date-selector\" class=\"xtr-section\">\n      <div><b>Perform actions on items with a date time:</b></div>\n      <input class=\"gt-toggle hidden greater\" id=\"pd__date-dirtoggle\" name=\"pd__date-dirtoggle\" type=\"checkbox\" checked /><label for=\"pd__date-dirtoggle\" title=\"toggle\"></label> <input id=\"pd__date-num\" type=\"tel\" placeholder=\"60\" value=\"60\" name=\"pd__date-num\" class=\"num-only\"/> <span>minutes ago</span>\n       <div>Set to: <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"60\">1 hour</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"1440\">1 day</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"10080\">1 week</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"43200\">30 days</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"262800\">half year</a>\n       <a class=\"pd__insert\" data-target=\"#pd__date-num\" data-value=\"525600\">year</a></div>\n    </div>\n  </div>\n  <div><input checked type=\"checkbox\" id=\"pd__gilded\" name=\"pd__gilded\"><label for=\"pd__gilded\">Do not perform actions on gilded</label></div>\n  <div><input checked type=\"checkbox\" id=\"pd__saved\" name=\"pd__saved\"><label for=\"pd__saved\">Do not perform actions on saved</label></div>\n  <div><input checked type=\"checkbox\" id=\"pd__mod\" name=\"pd__mod\"><label for=\"pd__mod\">Do not perform actions on mod distinguished</label></div>\n  <hr/>\n  <div>\n    <button>Process</button><input checked type=\"checkbox\" id=\"pd__remember\" name=\"pd__remember\" class=\"ind\"><label for=\"pd__remember\" data-help=\"This will store data on your local computer. It will NOT transmit any of this data.\">Remember Settings<a class=\"pd__q\">?</a></label>\n  </div>\n</form>\n\n\n<div class=\"processing\">\n  <p id=\"pd__audit-notice\"></p>\n  <span class=\"label\">Page Progress</span>\n  <div id=\"progress_page\" class=\"progress\">\n    <span class=\"bar\"></span>\n    <span class=\"text\" data-top=\"\" data-bottom=\"\"></span>\n  </div>\n  <span class=\"label\">Page Item Progress</span>\n  <div id=\"progress_item\" class=\"progress\">\n    <span class=\"bar\"></span>\n    <span class=\"text\" data-top=\"\" data-bottom=\"\"></span>\n  </div>\n  <div class=\"progress__byline\"><div class=\"row\">\n     <span class=\"type errors\"><span class=\"num\" data-num=\"\"></span> errors</span>\n     <span class=\"type exported\"><span class=\"num\" data-num=\"\"></span> <span class=\"caption\">exported</span></span>\n     <span class=\"type edited\"><span class=\"num\" data-num=\"\"></span> <span class=\"caption\">edited</span></span>\n     <span class=\"type deleted\"><span class=\"num\" data-num=\"\"></span> <span class=\"caption\">deleted</span></span>\n     <span class=\"type ignored\"><span class=\"num\" data-num=\"\"></span> ignored<span class=\"reasons\"></span></span>\n  </div></div>\n  <div class=\"stop-row\"><button id=\"pd__stop\" type=\"button\">Stop processing</button></div>\n</div>\n\n\n<div class=\"complete\">\n  <div class=\"summary\"></div>\n  <div class=\"progress__byline\"><div class=\"row\">\n     <span class=\"type errors\"><span class=\"num\" data-num=\"\"></span> errors</span>\n     <span class=\"type exported\"><span class=\"num\" data-num=\"\"></span> <span class=\"caption\">exported</span></span>\n     <span class=\"type edited\"><span class=\"num\" data-num=\"\"></span> <span class=\"caption\">edited</span></span>\n     <span class=\"type deleted\"><span class=\"num\" data-num=\"\"></span> <span class=\"caption\">deleted</span></span>\n     <span class=\"type ignored\"><span class=\"num\" data-num=\"\"></span> ignored<span class=\"reasons\"></span></span>\n  </div></div>\n  <div class=\"goodbye\"></div>\n</div>";
 // END GENERATED ASSETS
 pd.init();

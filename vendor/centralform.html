@@ -6,6 +6,9 @@
   <hr/>
   
   <h3>Actions to perform</h3>
+  <div data-help="Audit mode walks the same pages and applies the same filters, but never edits or deletes anything. It reports how many items it would edit, delete, or ignore. Items that would be edited or deleted are always added to the local backup.">
+    <input type="checkbox" id="pd__audit" name="pd__audit"><label for="pd__audit">Audit mode (report what would happen, change nothing)</label><a class="pd__q">?</a>
+  </div>
   <div><input checked type="checkbox" id="pd__export" name="pd__export"><label for="pd__export">Prepare local backup of items</label></div>
   <div><input checked type="checkbox" id="pd__submissions" name="pd__submissions"><label for="pd__submissions">Remove submissions</label></div>
   <div><input checked type="checkbox" id="pd__comments" name="pd__comments"><label for="pd__comments">Remove comments</label></div>
@@ -55,6 +58,7 @@
 
 
 <div class="processing">
+  <p id="pd__audit-notice"></p>
   <span class="label">Page Progress</span>
   <div id="progress_page" class="progress">
     <span class="bar"></span>
@@ -67,9 +71,9 @@
   </div>
   <div class="progress__byline"><div class="row">
      <span class="type errors"><span class="num" data-num=""></span> errors</span>
-     <span class="type exported"><span class="num" data-num=""></span> exported</span>
-     <span class="type edited"><span class="num" data-num=""></span> edited</span>
-     <span class="type deleted"><span class="num" data-num=""></span> deleted</span>
+     <span class="type exported"><span class="num" data-num=""></span> <span class="caption">exported</span></span>
+     <span class="type edited"><span class="num" data-num=""></span> <span class="caption">edited</span></span>
+     <span class="type deleted"><span class="num" data-num=""></span> <span class="caption">deleted</span></span>
      <span class="type ignored"><span class="num" data-num=""></span> ignored<span class="reasons"></span></span>
   </div></div>
   <div class="stop-row"><button id="pd__stop" type="button">Stop processing</button></div>
@@ -80,9 +84,9 @@
   <div class="summary"></div>
   <div class="progress__byline"><div class="row">
      <span class="type errors"><span class="num" data-num=""></span> errors</span>
-     <span class="type exported"><span class="num" data-num=""></span> exported</span>
-     <span class="type edited"><span class="num" data-num=""></span> edited</span>
-     <span class="type deleted"><span class="num" data-num=""></span> deleted</span>
+     <span class="type exported"><span class="num" data-num=""></span> <span class="caption">exported</span></span>
+     <span class="type edited"><span class="num" data-num=""></span> <span class="caption">edited</span></span>
+     <span class="type deleted"><span class="num" data-num=""></span> <span class="caption">deleted</span></span>
      <span class="type ignored"><span class="num" data-num=""></span> ignored<span class="reasons"></span></span>
   </div></div>
   <div class="goodbye"></div>
