@@ -13,9 +13,10 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function jqXHR(status, headers) {
+function jqXHR(status, headers, body) {
   return {
     status,
+    responseText: body || "",
     getResponseHeader(name) {
       return (headers && Object.prototype.hasOwnProperty.call(headers, name))
         ? headers[name]
@@ -23,6 +24,11 @@ function jqXHR(status, headers) {
     },
   };
 }
+
+const BLOCK_PAGE =
+  "<!doctype html><html><head>" +
+  "<style>.theme-light,:root{--rem360:22.5rem;--rem320:20rem}</style>" +
+  "</head><body><h1>You've been blocked by network security.</h1></body></html>";
 
 function makeContext() {
   const calls = [];
@@ -84,7 +90,7 @@ function resetRateLimit(context) {
   rate.maxRetries = 2;
   rate.lowRemaining = 5;
   rate.recoverAfter = 5;
-  rate.consecutive429 = 0;
+  rate.consecutiveThrottles = 0;
   rate.successStreak = 0;
   rate.nextSlot = 0;
   rate.penaltyUntil = 0;
@@ -118,6 +124,174 @@ test("retries a 429 automatically and resolves with the eventual response", asyn
   context.calls[1].doneHandler({ ok: true }, "success", jqXHR(200));
 
   assert.deepEqual(await result, { ok: true });
+});
+
+test("retries an HTML 403 block page automatically", async () => {
+  const context = makeContext();
+  const rate = resetRateLimit(context);
+
+  const result = rate.request({ url: "/search.json" });
+  await sleep(5);
+  assert.equal(context.calls.length, 1);
+  context.calls[0].failHandler(
+    jqXHR(403, { "Content-Type": "text/html; charset=UTF-8" }, BLOCK_PAGE),
+    "error",
+    ""
+  );
+  await sleep(30);
+  assert.equal(
+    context.calls.length,
+    2,
+    "the block page should be retried through the limiter"
+  );
+  context.calls[1].doneHandler(
+    { data: { children: [] } },
+    "success",
+    jqXHR(200, { "Content-Type": "application/json" })
+  );
+
+  assert.deepEqual(await result, { data: { children: [] } });
+});
+
+test("stops retrying block pages after maxBlockedRetries", async () => {
+  const context = makeContext();
+  const rate = resetRateLimit(context);
+  rate.maxBlockedRetries = 1;
+
+  const result = rate.request({ url: "/search.json" }).then(
+    () => {
+      throw new Error("expected the request to fail");
+    },
+    (error) => error
+  );
+
+  await sleep(5);
+  context.calls[0].failHandler(
+    jqXHR(403, { "Content-Type": "text/html" }, BLOCK_PAGE),
+    "error",
+    ""
+  );
+  await sleep(30);
+  assert.equal(context.calls.length, 2);
+  context.calls[1].failHandler(
+    jqXHR(403, { "Content-Type": "text/html" }, BLOCK_PAGE),
+    "error",
+    ""
+  );
+  const error = await result;
+
+  assert.equal(context.calls.length, 2);
+  assert.equal(error.blocked, true);
+  assert.equal(error.jqXHR.status, 403);
+});
+
+test("does not retry a JSON 403", async () => {
+  const context = makeContext();
+  resetRateLimit(context);
+
+  const result = context.pd.rateLimit.request({ url: "/api/del" }).then(
+    () => {
+      throw new Error("expected the request to fail");
+    },
+    (error) => error
+  );
+  await sleep(5);
+  context.calls[0].failHandler(
+    jqXHR(403, { "Content-Type": "application/json" }, '{"message":"Forbidden"}'),
+    "error",
+    "Forbidden"
+  );
+  const error = await result;
+
+  assert.equal(context.calls.length, 1);
+  assert.equal(error.blocked, false);
+});
+
+test("block-page error summaries omit inline CSS", () => {
+  const context = makeContext();
+
+  context.DOMParser = function () {};
+  context.DOMParser.prototype.parseFromString = function (html) {
+    return { body: { textContent: html.replace(/<[^>]*>/g, " ") } };
+  };
+
+  const message = context.pd.helpers.ajaxErrorMessage(
+    jqXHR(403, { "Content-Type": "text/html; charset=UTF-8" }, BLOCK_PAGE),
+    "error",
+    ""
+  );
+
+  assert.match(message, /HTTP 403/);
+  assert.match(message, /blocked by network security/);
+  assert.doesNotMatch(message, /--rem360|theme-light/);
+});
+
+test("skipping a blocked section resets sorts and timeframes", () => {
+  const context = makeContext();
+  context.pd.task = {
+    paths: {
+      sections: ["search", "submissions"],
+      sorts: ["controversial"],
+      timeframes: ["day"],
+    },
+  };
+
+  context.pd.actions.page.skipSection();
+
+  assert.deepEqual(Array.from(context.pd.task.paths.sections), ["submissions"]);
+  assert.deepEqual(Array.from(context.pd.task.paths.sorts), [
+    "new",
+    "hot",
+    "top",
+    "controversial",
+  ]);
+  assert.deepEqual(Array.from(context.pd.task.paths.timeframes), [
+    "all",
+    "hour",
+    "day",
+    "week",
+    "month",
+    "year",
+  ]);
+});
+
+test("a persistent block offers to skip the rest of the section", async () => {
+  const context = makeContext();
+  const confirmations = [];
+  let nextCalls = 0;
+
+  context.pd.task = {
+    pageCalls: 0,
+    info: { errors: 0 },
+    paths: {
+      sections: ["search", "submissions"],
+      sorts: ["top"],
+      timeframes: ["year"],
+    },
+    config: {},
+  };
+  context.pd.config = { user: "tester" };
+  context.pd.endpoints = { search: "/search.json" };
+  context.pd.rateLimit.request = function () {
+    return Promise.reject({ blocked: true });
+  };
+  context.pd.actions.page.next = function () {
+    nextCalls++;
+  };
+  context.confirm = function (message) {
+    confirmations.push(message);
+    return false;
+  };
+
+  context.pd.actions.page.handle();
+  await sleep(0);
+
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0], /Reddit blocked this search request/);
+  assert.match(confirmations[0], /Choose Cancel to skip the rest of search/);
+  assert.deepEqual(context.pd.task.paths.sections, ["submissions"]);
+  assert.equal(nextCalls, 1);
+  assert.equal(context.pd.task.info.errors, 1);
 });
 
 test("honors Retry-After and X-Ratelimit-Reset headers", () => {
@@ -180,7 +354,7 @@ test("grows the backoff and stops retrying at maxRetries", async () => {
 
   assert.equal(context.calls.length, 2);
   assert.equal(error.jqXHR.status, 429);
-  assert.equal(rate.consecutive429, 1);
+  assert.equal(rate.consecutiveThrottles, 1);
   assert.equal(rate.intervalMs, 20);
 });
 

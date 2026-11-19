@@ -28,6 +28,9 @@ The original project is [j0be/PowerDeleteSuite](https://github.com/j0be/PowerDel
 - Shows the HTTP status and Reddit response text in edit/delete retry dialogs.
 - Spaces API requests and automatically retries HTTP 429 responses with
   header-aware exponential backoff instead of stopping the run.
+- Retries Reddit's HTML 403 network-security block pages with capped backoff,
+  reports their readable message, and can skip the rest of the affected
+  section when the block persists.
 - Stops before destructive actions if Reddit does not expose a modhash for the
   current page.
 - Serves the control-center stylesheet and form from reviewed constants in this

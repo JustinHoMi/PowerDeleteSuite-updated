@@ -1,5 +1,5 @@
 var pd = {
-  version: "1.4.17",
+  version: "1.4.18",
   bookmarkver: "1.4",
   editStrings: [
     "I love ice cream.",
@@ -580,8 +580,13 @@ var pd = {
           responseText = raw;
         } else {
           try {
+            // Reddit's block pages carry their theme CSS inline. Strip the
+            // raw-text elements first so the user sees the message, not CSS.
+            var html = raw
+              .replace(/<style[\s\S]*?<\/style>/gi, " ")
+              .replace(/<script[\s\S]*?<\/script>/gi, " ");
             responseText = new DOMParser().parseFromString(
-              raw,
+              html,
               "text/html"
             ).body.textContent;
           } catch (e) {
@@ -600,7 +605,7 @@ var pd = {
         parts.push(errorThrown);
       }
       if (responseText) {
-        parts.push(responseText.replace(/\s+/g, " ").slice(0, 300));
+        parts.push(responseText.replace(/\s+/g, " ").trim().slice(0, 300));
       }
 
       return parts.length ? " (" + parts.join(" - ") + ")" : "";
@@ -760,9 +765,10 @@ var pd = {
     maxBackoffMs: 900000,
     jitterRatio: 0.2,
     maxRetries: 0,
+    maxBlockedRetries: 5,
     lowRemaining: 5,
     recoverAfter: 5,
-    consecutive429: 0,
+    consecutiveThrottles: 0,
     successStreak: 0,
     nextSlot: 0,
     penaltyUntil: 0,
@@ -782,6 +788,23 @@ var pd = {
         }
       }
       return null;
+    },
+    isBlockedResponse: function (jqXHR) {
+      var rate = pd.rateLimit,
+        contentType,
+        body;
+
+      if (!jqXHR || jqXHR.status !== 403) {
+        return false;
+      }
+
+      contentType = rate.responseHeader(jqXHR, "Content-Type") || "";
+      body = jqXHR.responseText || "";
+      return (
+        /text\/html/i.test(contentType) ||
+        /^\s*<!doctype html/i.test(body) ||
+        /<html[\s>]/i.test(body)
+      );
     },
     messageDelay: function (message) {
       var match = /try again in\s*(\d+)\s*(second|minute|hour)s?/i.exec(
@@ -855,7 +878,7 @@ var pd = {
         ),
         reset = parseFloat(rate.responseHeader(jqXHR, "X-Ratelimit-Reset"));
 
-      rate.consecutive429 = 0;
+      rate.consecutiveThrottles = 0;
       rate.successStreak++;
       if (rate.successStreak >= rate.recoverAfter) {
         rate.intervalMs = rate.minIntervalMs;
@@ -886,17 +909,17 @@ var pd = {
         pd.ui.status("");
       }
     },
-    noteRateLimited: function (jqXHR, hintMs) {
+    noteThrottle: function (jqXHR, hintMs) {
       var rate = pd.rateLimit,
         wait;
 
-      rate.consecutive429++;
+      rate.consecutiveThrottles++;
       rate.successStreak = 0;
       rate.intervalMs = Math.min(
         rate.maxIntervalMs,
         rate.intervalMs * 2
       );
-      wait = rate.retryDelay(jqXHR, rate.consecutive429, hintMs);
+      wait = rate.retryDelay(jqXHR, rate.consecutiveThrottles, hintMs);
       rate.penaltyUntil = Math.max(rate.penaltyUntil, Date.now() + wait);
       rate.nextSlot = Math.max(rate.nextSlot, rate.penaltyUntil);
       return wait;
@@ -905,32 +928,34 @@ var pd = {
       var rate = pd.rateLimit;
 
       return new Promise(function (resolve, reject) {
-        var attempt = 0;
+        var attempt = 0,
+          blockedAttempt = 0;
 
-        function retryAfterRateLimit(jqXHR, hintMs, reason) {
-          attempt++;
-          var wait = rate.noteRateLimited(jqXHR, hintMs);
-          var attempts =
-            rate.maxRetries === 0
-              ? ""
-              : "/" + rate.maxRetries;
+        function retryAfterThrottle(
+          jqXHR,
+          hintMs,
+          reason,
+          attemptNumber,
+          maxAttempts
+        ) {
+          var wait = rate.noteThrottle(jqXHR, hintMs);
+          var attempts = maxAttempts === 0 ? "" : "/" + maxAttempts;
           console.warn(
             "PowerDeleteSuite: " +
               reason +
               ", backing off for " +
               Math.round(wait / 1000) +
               "s (retry " +
-              attempt +
+              attemptNumber +
               attempts +
               ")"
           );
           pd.ui.status(
-            "Rate limited by Reddit (" +
-              reason +
-              "). Waiting " +
+            reason +
+              ". Waiting " +
               Math.max(1, Math.round(wait / 1000)) +
               "s before retrying (attempt " +
-              attempt +
+              attemptNumber +
               attempts +
               ")."
           );
@@ -943,10 +968,13 @@ var pd = {
               var limitMessage = rate.isRateLimitedResponse(data);
               if (limitMessage) {
                 if (rate.shouldRetry(attempt)) {
-                  retryAfterRateLimit(
+                  attempt++;
+                  retryAfterThrottle(
                     jqXHR,
                     rate.messageDelay(limitMessage),
-                    limitMessage
+                    "Rate limited by Reddit (" + limitMessage + ")",
+                    attempt,
+                    rate.maxRetries
                   );
                 } else {
                   reject({
@@ -954,6 +982,7 @@ var pd = {
                     textStatus: textStatus,
                     errorThrown: limitMessage,
                     rateLimited: true,
+                    blocked: false,
                   });
                 }
                 return;
@@ -961,18 +990,37 @@ var pd = {
               rate.noteSuccess(jqXHR);
               resolve(data);
             }).fail(function (jqXHR, textStatus, errorThrown) {
+              var blocked = rate.isBlockedResponse(jqXHR);
+
               if (
                 jqXHR &&
                 jqXHR.status === 429 &&
                 rate.shouldRetry(attempt)
               ) {
-                retryAfterRateLimit(jqXHR, 0, "HTTP 429");
+                attempt++;
+                retryAfterThrottle(
+                  jqXHR,
+                  0,
+                  "Rate limited by Reddit (HTTP 429)",
+                  attempt,
+                  rate.maxRetries
+                );
+              } else if (blocked && blockedAttempt < rate.maxBlockedRetries) {
+                blockedAttempt++;
+                retryAfterThrottle(
+                  jqXHR,
+                  0,
+                  "Reddit blocked the request (HTTP 403)",
+                  blockedAttempt,
+                  rate.maxBlockedRetries
+                );
               } else {
                 reject({
                   jqXHR: jqXHR,
                   textStatus: textStatus,
                   errorThrown: errorThrown,
                   rateLimited: !!(jqXHR && jqXHR.status === 429),
+                  blocked: blocked,
                 });
               }
             });
@@ -1019,6 +1067,11 @@ var pd = {
           pd.task.paths.sections.splice(0, 1);
         }
         return true;
+      },
+      skipSection: function () {
+        pd.setup.resetTimes();
+        pd.setup.resetSorts();
+        pd.task.paths.sections.splice(0, 1);
       },
       handle: function () {
         pd.task.pageCalls++;
@@ -1068,11 +1121,34 @@ var pd = {
             }
           },
           function (error) {
+            var section = pd.task.paths.sections[0];
+
             pd.task.info.errors++;
+            if (error.blocked) {
+              if (
+                confirm(
+                  "Reddit blocked this " +
+                    section +
+                    " request with its network-security page (HTTP 403). " +
+                    "This is not a rate limit, so retrying may not help.\n\n" +
+                    "Log in at https://www.reddit.com, turn off any VPN or proxy, " +
+                    "then reload this page and run the suite again.\n\n" +
+                    "Would you like to retry? Choose Cancel to skip the rest of " +
+                    section +
+                    "."
+                )
+              ) {
+                pd.actions.page.handle();
+              } else {
+                pd.actions.page.skipSection();
+                pd.actions.page.next();
+              }
+              return;
+            }
             if (
               confirm(
                 "Error getting " +
-                  pd.task.paths.sections[0] +
+                  section +
                   " page" +
                   pd.helpers.ajaxErrorMessage(
                     error.jqXHR,
